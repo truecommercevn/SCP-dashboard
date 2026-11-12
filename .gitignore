@@ -1,0 +1,7 @@
+inputs/
+site/
+api/
+state/
+legacy-static-html/
+*.xlsx
+__pycache__/
