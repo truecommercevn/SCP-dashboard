@@ -1,0 +1,76 @@
+name: Refresh dashboard
+
+on:
+  schedule:
+    - cron: '37 * * * *'        # hourly (UTC). Pick a different minute per dashboard to avoid clashes.
+  push:
+    branches: [main]           # code change -> rebuild and deploy even if the Excel files did not change
+    paths-ignore: ['README.md']
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Rebuild and deploy even if no file changed'
+        type: boolean
+        default: false
+
+concurrency:
+  group: refresh-dashboard
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: dashboard-state-${{ github.run_id }}
+          restore-keys: dashboard-state-
+
+      - name: Fetch newest Excel files from SharePoint
+        id: fetch
+        env:
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SITE_URL: ${{ vars.SITE_URL }}
+          FOLDER: ${{ vars.FOLDER }}
+          FILES: ${{ vars.FILES }}
+          SHARED_FILES: ${{ vars.SHARED_FILES }}
+          FORCE: ${{ (inputs.force || github.event_name == 'push') && 'true' || 'false' }}
+        # write to a file first: a plain "python x | tee" hides errors and shows a green step
+        run: |
+          python fetch_kit.py > fetch_out.txt
+          cat fetch_out.txt >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        if: steps.fetch.outputs.changed == 'true'
+        env:
+          SP_HOST: ${{ vars.SHAREPOINT_ORIGIN }}
+        run: python build.py --out site --api api --frame-ancestors "${SP_HOST:-https://*.sharepoint.com}"
+
+      - name: Deploy to Azure Static Web Apps
+        if: steps.fetch.outputs.changed == 'true'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: upload
+          app_location: site
+          api_location: api
+          skip_app_build: true
+
+      - name: Save state
+        if: steps.fetch.outputs.changed == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: dashboard-state-${{ github.run_id }}
