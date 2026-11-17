@@ -43,7 +43,7 @@ def publish(index_html, out, api, payloads, views, master, auth, api_src,
         json.dump(payload, open(os.path.join(api, 'data', key + '.json'), 'w', encoding='utf-8'), ensure_ascii=False)
     access = {}
     for v in views:
-        if slug(v['name']) not in payloads: print('warning: no data for view', v['name']); continue
+        if slug(v['name']) not in payloads: print(f"::warning::View '{v['name']}' in Dashboard Access.xlsx has no data, so those people cannot see anything."); continue
         for e in v['emails']: access.setdefault(e, []).append(slug(v['name']))
     for e in master: access.setdefault(e, []).append('master')
     json.dump(access, open(os.path.join(api, 'access.json'), 'w'), indent=1)

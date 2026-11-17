@@ -67,7 +67,7 @@ def hire_dates(emp_path):
     """email (lower) -> Original Hire Date, from the shared employee list (sheet 'Main sheet')."""
     if not emp_path or not os.path.exists(emp_path): return {}
     df = pd.read_excel(emp_path, sheet_name='Main sheet', dtype=str)
-    df['hd'] = pd.to_datetime(df['Original Hire Date'], errors='coerce')
+    df['hd'] = pd.to_datetime(df['Original Hire Date'], format='mixed', errors='coerce')
     df = df.dropna(subset=['Email', 'hd'])
     return {str(e).strip().lower(): h for e, h in zip(df['Email'], df['hd'])}
 
@@ -85,13 +85,39 @@ def week_stats(sub_launch, hire, asof, weeks=12):
     return ok, due
 
 
+def warn(msg):
+    print(f'::warning::{msg}')          # shows as a yellow annotation on the GitHub Actions run
+
+
+def _tokens(x): return sorted(re.findall(r"[a-z0-9']+", str(x).lower()))
+
+
+def find_manager(view_name, mgr_counts):
+    """mgr_counts: {'Nguyen, Anh (001810)': number of reports}. Returns the employee id of the manager, or None."""
+    want = _tokens(view_name); exact, partial = [], []
+    for m, n in mgr_counts.items():
+        mm = ID.match(m)
+        if not mm: continue
+        have = _tokens(mm.group(1) + ' ' + mm.group(2))
+        if have == want: exact.append((n, mm.group(3), m))
+        elif set(want) <= set(have): partial.append((n, mm.group(3), m))
+    pick = exact or (partial if len(partial) == 1 else [])
+    if len(pick) > 1: warn(f'More than one manager is called "{view_name}" ({", ".join(p[2] for p in pick)}); using the one with most reports.')
+    return max(pick)[1] if pick else None
+
+
 def build_teams(ml_path, scp_path, team_names, emp_path=None):
     ml = pd.read_excel(ml_path, sheet_name='Manager Levels', dtype=str)
     lv = [c for c in ml.columns if c.startswith('Manager Level')]
     ml['EmployeeId'] = ml['EmployeeId'].astype(str)
-    u = pd.read_excel(scp_path, sheet_name='Data', dtype=str)
+    mgr_counts = Counter(str(x) for _, r in ml.iterrows() for x in r[lv] if isinstance(x, str))
+    paths = scp_path if isinstance(scp_path, (list, tuple)) else [scp_path]       # one file per export: read all, oldest first
+    frames = [pd.read_excel(q, sheet_name='Data', dtype=str) for q in paths]
+    u = pd.concat(frames, ignore_index=True)
+    # the same check-in can appear in several exports: keep the newest export's version
+    u = u.drop_duplicates(subset=['Employee ID', 'Launch Date'], keep='last').reset_index(drop=True)
     u['id'] = u['Employee ID'].astype(str)
-    for c, n in (('Launch Date', 'ld'), ('Employee Shared Date', 'sd')): u[n] = pd.to_datetime(u[c], errors='coerce')
+    for c, n in (('Launch Date', 'ld'), ('Employee Shared Date', 'sd')): u[n] = pd.to_datetime(u[c], format='mixed', errors='coerce')
     u['r'] = pd.to_numeric(u['Employee Rating'], errors='coerce')
     u['okf'] = u['Employee Status'].isin(['Shared', 'Finalized'])
     # some rows (e.g. check-ins not opened yet) come with blank employee fields: fill them from the person's other rows first
@@ -99,7 +125,7 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
     u[prof] = u.groupby('id')[prof].transform(lambda c: c.ffill().bfill())
     u = u[(u['Employee: Country'] == 'Vietnam')].copy()
     u['name'] = u['Employee: Preferred First Name'].fillna(u['Employee FirstName']) + ' ' + u['Employee LastName']
-    asof = max(u.sd.max(), u.ld.max()).normalize()
+    asof = u.sd.max().normalize()      # latest date any check-in was shared = the data date (comes from the User Initiated file)
     asof_s = f'{asof.month}/{asof.day}/{asof.year}'
     # Probation rule: hired less than 2 months before the data date -> listed by name ("New hire") and counted in Total Headcount only;
     # left out of every other number (SCP data, completion, ratings, no-SCP list).
@@ -111,11 +137,13 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
     new_ids = {i for i, h in hire_of.items() if pd.notna(h) and h > cutoff}
     out = {}
     for tn in team_names:
-        first, last = tn.split(' ', 1)[0], tn.split(' ', 1)[1] if ' ' in tn else ''
-        want = f'{last}, {first} ('
-        mem = ml[ml[lv].apply(lambda r: any(isinstance(x, str) and x.startswith(want) for x in r), axis=1)]
-        if mem.empty: print(f'WARN: nobody reports to "{tn}"'); continue
-        lead_id = next(mid(x) for _, r in mem.iterrows() for x in r[lv] if isinstance(x, str) and x.startswith(want))
+        # find the team lead in the reporting chain: "Anh Nguyen" <-> "Nguyen, Anh (001810)" (word order and a middle initial are tolerated)
+        want_id = find_manager(tn, mgr_counts)
+        if want_id is None:
+            warn(f'Team "{tn}" was NOT created: no manager with that name (or nobody reporting to them) in the OneOnOnes Manager Levels sheet. Check the spelling in Dashboard Access.xlsx or drop a newer OneOnOnes file.'); continue
+        want = f'({want_id})'
+        mem = ml[ml[lv].apply(lambda r: any(isinstance(x, str) and x.endswith(want) for x in r), axis=1)]
+        lead_id = want_id
         chain = {r['EmployeeId']: [x for x in r[lv] if isinstance(x, str)] for _, r in mem.iterrows()}
         g = u[u.id.isin(chain)].copy()
         # active, Vietnam, has a record
