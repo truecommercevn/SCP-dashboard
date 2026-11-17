@@ -124,10 +124,21 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
     paths = scp_path if isinstance(scp_path, (list, tuple)) else [scp_path]       # one file per export: read all
     paths = sorted(paths, key=lambda q: (export_date(q) if pd.notna(export_date(q)) else pd.Timestamp.min, q))   # oldest export first (by 'Exported On', not by file name)
     frames = [pd.read_excel(q, sheet_name='Data', dtype=str) for q in paths]
+    print('User Initiated exports read:', [(os.path.basename(q), len(f), 'Exported On ' + str(export_date(q).date() if pd.notna(export_date(q)) else '?')) for q, f in zip(paths, frames)])
     u = pd.concat(frames, ignore_index=True)
     # the same check-in can appear in several exports: keep the newest export's version
     u = u.drop_duplicates(subset=['Employee ID', 'Launch Date'], keep='last').reset_index(drop=True)
     u['id'] = u['Employee ID'].astype(str)
+    # Question columns are found by keyword, and several wordings are merged (the form wording changed between exports,
+    # e.g. "Top 3 Challenges..." vs "Are there any challenges you've faced this week?"), so older and newer exports combine.
+    def merged(key, *needles, startswith=None, required=True):
+        cols = [c for c in u.columns if (startswith and str(c).strip().lower().startswith(startswith.lower())) or (not startswith and all(n in str(c).strip().lower() for n in needles))]
+        if not cols:
+            if required: raise SystemExit(f'::error::Column not found in the User Initiated export (looking for {startswith or needles}). Columns present: {list(u.columns)}')
+            return None
+        name = '_q_' + key; u[name] = u[cols].bfill(axis=1).iloc[:, 0]; return name
+    COL = {'c': merged('c', 'challenge'), 's': merged('s', 'success'), 'p': merged('p', 'priorit'), 'o': merged('o', 'other topics', required=False),
+           'w': merged('w', 'workload', 'elaborate', required=False), 'f': merged('f', startswith='F - ', required=False)}
     for c, n in (('Launch Date', 'ld'), ('Employee Shared Date', 'sd')): u[n] = pd.to_datetime(u[c], format='mixed', errors='coerce')
     u['r'] = pd.to_numeric(u['Employee Rating'], errors='coerce')
     u['okf'] = u['Employee Status'].isin(['Shared', 'Finalized'])
@@ -188,15 +199,13 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
                 'avg_recent': ar, 'avg_prior': ap, 'delta': round(ar - ap, 2) if ap is not None else None,
                 'dist_recent': {str(k): int(v) for k, v in rec.r.dropna().astype(int).value_counts().sort_index().items()},
                 'n_recent_rated': int(rec.r.notna().sum())}
-        FCOL = next(c for c in g.columns if c.startswith('F - '))   # manager's written response
-        W = 'E - How are you feeling about your workload and job duties this week? - Elaborate'
         cut = lambda v: ('' if pd.isna(v) else str(v).strip()[:3000])
         rec_ids = set(rec.index)
         checkins = [{'name': r['name'], 'sup': r.sup, 'r': int(r.r), 'date': fdate(r.sd), 'ym': r.sd.strftime('%b %Y'), 'mk': r.sd.strftime('%Y-%m'), 'rec': int(i in rec_ids),
-                     'w': cut(r[W]), 'c': cut(r['E - Top 3 Challenges (can be new from prior week, or ongoing from prior weeks).']),
-                     's': cut(r['E - Top 3 Successes from the prior week.']), 'p': cut(r['E - Top 3 Priorities for the upcoming week.']),
-                     'o': cut(r['E - Any other topics you would like to include in your weekly SCP. ']),
-                     'f': cut(r[FCOL]), 'fn': ('' if pd.isna(r['Facilitator FirstName']) else f"{r['Facilitator FirstName']} {r['Facilitator LastName']}")}
+                     'w': cut(r[COL['w']] if COL['w'] else None), 'c': cut(r[COL['c']]),
+                     's': cut(r[COL['s']]), 'p': cut(r[COL['p']]),
+                     'o': cut(r[COL['o']] if COL['o'] else None),
+                     'f': cut(r[COL['f']] if COL['f'] else None), 'fn': ('' if pd.isna(r['Facilitator FirstName']) else f"{r['Facilitator FirstName']} {r['Facilitator LastName']}")}
                     for i, r in g[g.okf & g.r.notna() & g.sd.notna()].sort_values('sd', ascending=False).iterrows()]
         s = g[g['okf'] & g.sd.notna()]
         trend = []
@@ -241,7 +250,7 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
         names = {mid(c): disp(c) for ch in chain.values() for c in ch}
         mgr_filter = [{'id': m, 'name': names.get(m, m), 'n': n} for m, n in cnt.most_common()]
         # free text
-        ct, st = 'E - Top 3 Challenges (can be new from prior week, or ongoing from prior weeks).', 'E - Top 3 Successes from the prior week.'
+        ct, st = COL['c'], COL['s']
         sub = g[g['okf']].sort_values('sd', ascending=False)
         ch = sub[sub[ct].notna()]; su = sub[sub[st].notna()]
         cc, sc = themes_of(ch[ct]), themes_of(su[st], THEMES_S)
