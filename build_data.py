@@ -106,12 +106,23 @@ def find_manager(view_name, mgr_counts):
     return max(pick)[1] if pick else None
 
 
+def export_date(path):
+    """'Exported On' from the Overview sheet of a User Initiated export (NaT if missing)."""
+    try:
+        ov = pd.read_excel(path, sheet_name='Overview', header=None, dtype=str)
+        row = ov[ov[0].astype(str).str.strip().str.lower() == 'exported on']
+        return pd.to_datetime(row.iloc[0, 1], format='mixed', errors='coerce') if len(row) else pd.NaT
+    except Exception:
+        return pd.NaT
+
+
 def build_teams(ml_path, scp_path, team_names, emp_path=None):
     ml = pd.read_excel(ml_path, sheet_name='Manager Levels', dtype=str)
     lv = [c for c in ml.columns if c.startswith('Manager Level')]
     ml['EmployeeId'] = ml['EmployeeId'].astype(str)
     mgr_counts = Counter(str(x) for _, r in ml.iterrows() for x in r[lv] if isinstance(x, str))
-    paths = scp_path if isinstance(scp_path, (list, tuple)) else [scp_path]       # one file per export: read all, oldest first
+    paths = scp_path if isinstance(scp_path, (list, tuple)) else [scp_path]       # one file per export: read all
+    paths = sorted(paths, key=lambda q: (export_date(q) if pd.notna(export_date(q)) else pd.Timestamp.min, q))   # oldest export first (by 'Exported On', not by file name)
     frames = [pd.read_excel(q, sheet_name='Data', dtype=str) for q in paths]
     u = pd.concat(frames, ignore_index=True)
     # the same check-in can appear in several exports: keep the newest export's version
@@ -125,7 +136,16 @@ def build_teams(ml_path, scp_path, team_names, emp_path=None):
     u[prof] = u.groupby('id')[prof].transform(lambda c: c.ffill().bfill())
     u = u[(u['Employee: Country'] == 'Vietnam')].copy()
     u['name'] = u['Employee: Preferred First Name'].fillna(u['Employee FirstName']) + ' ' + u['Employee LastName']
-    asof = u.sd.max().normalize()      # latest date any check-in was shared = the data date (comes from the User Initiated file)
+    # data date = "Exported On" in the Overview sheet of the newest export; if missing, the latest date a check-in was shared
+    exp = []
+    for q in paths:
+        try:
+            ov = pd.read_excel(q, sheet_name='Overview', header=None, dtype=str)
+            row = ov[ov[0].astype(str).str.strip().str.lower() == 'exported on']
+            if len(row): exp.append(pd.to_datetime(row.iloc[0, 1], format='mixed', errors='coerce'))
+        except Exception: pass
+    exp = [e for e in exp if pd.notna(e)]
+    asof = (max(exp) if exp else u.sd.max()).normalize()
     asof_s = f'{asof.month}/{asof.day}/{asof.year}'
     # Probation rule: hired less than 2 months before the data date -> listed by name ("New hire") and counted in Total Headcount only;
     # left out of every other number (SCP data, completion, ratings, no-SCP list).

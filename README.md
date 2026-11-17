@@ -5,7 +5,7 @@ Một trang `index.html` (không chứa dữ liệu). Sau khi đăng nhập, API
 ## Cập nhật hằng kỳ
 Thả file mới vào folder `SCP Dashboard` trên SharePoint (People Insights Hub), không tạo thêm folder:
 - `OneOnOnes_YYYY_MM_DD_HHMMSS.xlsx` (sheet Manager Levels) – workflow lấy file có ngày mới nhất
-- `User Initiated 1-on-1s.xlsx` (sheet Data) – dữ liệu tích lũy nhiều tháng, thả chung hết
+- `User Initiated 1-on-1s*.xlsx` (sheet Data) – thả thẳng file vừa tải về, **không cần đổi tên**. Mỗi export chứa toàn bộ lịch sử nên thường chỉ cần giữ bản mới nhất (ghi đè cùng tên), nhưng thả thêm file cũ/mới vẫn được: dashboard đọc tất cả, sắp theo ngày "Exported On" trong sheet Overview, dòng trùng (cùng nhân viên + ngày launch) lấy bản export mới nhất. Ngày hiển thị "SCP data as of" cũng lấy từ "Exported On"
 - `Dashboard Access.xlsx` – ai xem team nào (sheet Views: tên team lead + email, cách nhau bằng `;`; sheet Master access)
 - Danh sách nhân viên dùng chung nằm ở thư mục gốc People Insights Hub (`Danh sach nhan vien*.xlsx`)
 
@@ -23,7 +23,7 @@ Không đưa lên GitHub: `legacy-static-html/` (chứa dữ liệu thật), m�
 
 ## Cấu hình GitHub / Azure
 - Variables: `SITE_URL` = `https://tcapc.sharepoint.com/sites/performance`; `FOLDER` = `SCP Dashboard`; `SHAREPOINT_ORIGIN` = `https://tcapc.sharepoint.com`;
-  `FILES` = `{"access":"Dashboard Access\\.xlsx","oneonones":"OneOnOnes_(\\d{4}_\\d{2}_\\d{2})_\\d+\\.xlsx","scp":"User Initiated 1-on-1s\\.xlsx"}`
+  `FILES` = `{"access":"Dashboard Access\\.xlsx","oneonones":"OneOnOnes_(\\d{4}_\\d{2}_\\d{2})_\\d+\\.xlsx","scp[all]":"User Initiated 1-on-1s.*\\.xlsx"}`
   `SHARED_FILES` = `{"employees":"Danh sach nhan vien.*\\.xlsx"}`
 - Secrets: `TENANT_ID`, `CLIENT_ID`, `CLIENT_SECRET` (giống Goal Dashboard), `AZURE_STATIC_WEB_APPS_API_TOKEN` (của Static Web App **mới** cho SCP).
 - App VN Office Page: thêm Redirect URI loại Single-page application = URL của Static Web App SCP.

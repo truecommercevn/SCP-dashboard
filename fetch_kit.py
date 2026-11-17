@@ -5,6 +5,7 @@ Env: TENANT_ID, CLIENT_ID, CLIENT_SECRET, SITE_URL (https://tcapc.sharepoint.com
      FOLDER (e.g. "SCP Dashboard/Data"), LIBRARY (default Documents), FORCE (true = ignore "unchanged"),
      FILES = JSON {"role": "regex"}, e.g. {"data": "ScpExport_(\\d{4}-\\d{2}-\\d{2})\\.xlsx", "access": "Dashboard Access\\.xlsx"}
 Rule: if the regex has a group (a date), the highest group wins; otherwise the most recently modified match wins.
+Role names ending in "[all]" keep every matching file (saved as inputs/<role>/<date>.xlsx, an undated name counts as the oldest).
 Role names ending in "[]" collect SEVERAL files: regex group 1 = the key (e.g. team), group 2 (optional) = date; for each key the
 newest date wins. They are saved as inputs/<role>/<key>.<ext>, e.g. FILES {"teams[]": "SCP_Dashboard_Vietnam_(\\w+)_Team_(\\d{4}-\\d{2}-\\d{2})\\.html"}.
 Writes inputs/<role>.xlsx, inputs/names.json (role -> real file name), inputs/auth.json (public ids), state/fingerprint.txt
@@ -44,7 +45,10 @@ def main():
         hits = [(re.fullmatch(rx, x['name'], re.I), x) for x in pool]
         hits = [(m, x) for m, x in hits if m]
         if not hits: sys.exit(f'no file for "{role}" matching {rx}')
-        if role.endswith('[]'):
+        if role.endswith('[all]'):          # keep EVERY matching file (e.g. each monthly export); group 1 (optional) = date in the name
+            for m, x in hits:
+                key = (m.group(1) if m.groups() and m.group(1) else '0000-' + re.sub(r'\W+', '_', x['name'].rsplit('.', 1)[0])); picked[f'{role[:-5]}/{key}'] = x
+        elif role.endswith('[]'):
             best = {}
             for m, x in hits:
                 key, day = m.group(1), (m.group(2) if m.lastindex and m.lastindex >= 2 else x.get('lastModifiedDateTime', ''))
